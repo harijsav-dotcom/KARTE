@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="lv">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interaktīva maršruta karte — Krabi & salas</title>
+
+<!-- Leaflet CSS & JS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  body, html { height: 100%; margin: 0; font-family: Arial, Helvetica, sans-serif; background: #f4f4f4; color: #222; }
+  #container { display: flex; height: 100vh; }
+  #map { flex: 1; }
+  #panel { width: 360px; max-width: 40%; padding: 14px; box-sizing: border-box; background: #fff; border-left:1px solid #ddd; overflow:auto; }
+  .dark #panel { background: #141414; color:#e9e9e9; border-left-color:#333; }
+  .controls { margin-bottom:12px; }
+  .point-list { margin:8px 0; padding:0; list-style:none; }
+  .point-list li { padding:6px 4px; border-bottom:1px dashed #eee; display:flex; align-items:center; justify-content:space-between; }
+  .point-name { cursor:pointer; }
+  button { background:#1976d2; color:#fff; border:0; padding:6px 8px; border-radius:6px; cursor:pointer; }
+  button.secondary { background:#777; }
+  .icon-btn { background:transparent; border:0; cursor:pointer; font-size:18px; }
+  label { font-weight:600; display:block; margin-bottom:6px; }
+  .small { font-size:13px; color:#666; }
+  .dark .small { color:#aaa; }
+  .input-row { display:flex; gap:8px; margin-bottom:8px; }
+  input[type="text"]{flex:1;padding:6px;border:1px solid #ccc;border-radius:6px;}
+  select{padding:6px;border-radius:6px;border:1px solid #ccc;}
+  .hint{font-size:12px;color:#666;margin-top:6px;}
+  .dark input[type="text"], .dark select { background:#222; color:#eee; border-color:#444; }
+  .dark button { box-shadow:none; }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="map"></div>
+  <div id="panel" aria-live="polite">
+    <h2>Interaktīva maršruta karte — Krabi & salas</h2>
+    <div class="controls">
+      <label for="startSelect">Izvēlies starta punktu:</label>
+      <select id="startSelect"></select>
+      <div style="margin-top:8px;">
+        <button id="applyStart">🔁 Izmanto kā sākumu</button>
+        <button id="reverseBtn" class="secondary">🔄 Apgriezt secību</button>
+      </div>
+    </div>
+
+    <div class="controls">
+      <label>Pievienot jaunu punktu (klikšķini uz kartes vai izmanto laukus):</label>
+      <div class="input-row">
+        <input id="newName" placeholder="Nosaukums (piem., 'Jauna pludmale')" />
+        <input id="newIcon" placeholder="Iekš. ikona (emoji) — piemērs: 🏖️" style="width:80px"/>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="addBtn">➕ Pievienot</button>
+        <button id="enableAdd" class="secondary">🖱 Kartē pievienošana: IZSLĒGTA</button>
+      </div>
+      <div class="hint">Ja izvēlies 'Kartē pievienošana', klikšķinot kartē tu vari pievienot punktu. Pēc pievienošanas — izmanto 'Izmanto kā sākumu' vai 'Apgriezt secību'.</div>
+    </div>
+
+    <div class="controls">
+      <label>Animēt maršrutu:</label>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button id="animateBtn">▶ Sākt animāciju</button>
+        <button id="stopAnim" class="secondary">■ Apturēt</button>
+      </div>
+      <div class="hint small">Animācija pārvieto ikonu pa līniju starp punktiem. Klikšķini punktu sarakstā, lai pietuvinātu.</div>
+    </div>
+
+    <div class="controls">
+      <label>Stāvoklis / saraksts:</label>
+      <ul id="pointList" class="point-list"></ul>
+    </div>
+
+    <div class="controls">
+      <button id="darkToggle" class="secondary">🌙 Tumšais režīms</button>
+      <div class="hint small">Saglabā tagadni, tu vari lejupielādēt HTML failu, lai palaistu lokāli.</div>
+    </div>
+
+    <div style="margin-top:10px;font-size:13px;color:#444" class="small">
+      <strong>Piezīme:</strong> Aprēķini ir tiešie (great-circle) — reāls ceļojums var būt garāks (prāmji, ceļi).
+    </div>
+  </div>
+</div>
+
+<!-- Leaflet -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+// --- sākotnējie punkti ---
+let points = [
+  {name:'Long Beach Club (Klong Muang / Krabi)', lat:8.04939, lon:98.75576, icon:'🏖️', id:cryptoRandomId()},
+  {name:'Fullmoon House / Fullmoon Beachresort (Ao Nang)', lat:8.03628, lon:98.83281, icon:'🌅', id:cryptoRandomId()},
+  {name:'Lanta Coral Beach Resort (Koh Lanta, Klong Nin)', lat:7.53396, lon:99.04992, icon:'🏝️', id:cryptoRandomId()},
+  {name:'Koh Ngai Sea Open Resort (Koh Ngai)', lat:7.41690, lon:99.20680, icon:'⛵', id:cryptoRandomId()},
+  {name:'Mook Montra Resort Sea Front (Koh Mook)', lat:7.370857, lon:99.297964, icon:'🚤', id:cryptoRandomId()},
+  {name:'Koh Phi Phi', lat:7.73828, lon:98.77091, icon:'🐠', id:cryptoRandomId()}
+];
+
+// helper: secure random-ish id
+function cryptoRandomId(){ try{ return 'id_'+crypto.getRandomValues(new Uint32Array(1))[0]; }catch(e){ return 'id_'+Math.floor(Math.random()*1e9);} }
+
+// --- karte ---
+const map = L.map('map',{worldCopyJump:true}).setView([7.9,99.0],8);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:18 }).addTo(map);
+
+let markers = {}; // id -> marker
+let polyline = null;
+let animatedMarker = null;
+let animInterval = null;
+let animState = {running:false, idx:0, t:0, steps:200};
+
+function renderMap(){
+  // remove existing markers and polyline
+  if(polyline) map.removeLayer(polyline);
+  Object.values(markers).forEach(m=>{ map.removeLayer(m); });
+  markers = {};
+
+  // add markers
+  points.forEach((p)=>{
+    const icon = L.divIcon({html:`<div style="font-size:20px">${p.icon||'📍'}</div>`, className:'', iconSize:[30,30]});
+    const m = L.marker([p.lat,p.lon],{title:p.name, icon:icon}).addTo(map);
+    m.bindPopup(`<div style="font-size:18px">${p.icon||'📍'}</div><b>${p.name}</b><div style="margin-top:6px"><button onclick="zoomToPoint('${p.id}')">🔎 Pietuvināt</button> <button onclick="useAsStart('${p.id}')">📍 Lietot kā sākumu</button></div>`);
+    markers[p.id] = m;
+  });
+
+  // polyline
+  const latlngs = points.map(p=>[p.lat,p.lon]);
+  polyline = L.polyline(latlngs, {color:'#1976d2', weight:4, dashArray:'8 6', opacity:0.9}).addTo(map);
+  map.fitBounds(polyline.getBounds().pad(0.15));
+  updateUI();
+}
+
+// update side panel list and start select
+function updateUI(){
+  const list = document.getElementById('pointList');
+  list.innerHTML = '';
+  const startSelect = document.getElementById('startSelect');
+  startSelect.innerHTML = '';
+  points.forEach((p,i)=>{
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="point-name" onclick="zoomToPoint('${p.id}')">${i+1}. ${p.icon||'📍'} ${p.name}</span>
+                    <span style="display:flex;gap:6px;align-items:center">
+                      <button class="icon-btn" title="Pārvietot uz augšu" onclick="moveUp('${p.id}')">▲</button>
+                      <button class="icon-btn" title="Pārvietot uz leju" onclick="moveDown('${p.id}')">▼</button>
+                      <button class="icon-btn" title="Dzēst" onclick="removePoint('${p.id}')">✖</button>
+                    </span>`;
+    list.appendChild(li);
+
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.text = `${p.icon||'📍'} ${p.name}`;
+    startSelect.appendChild(opt);
+  });
+}
+
+// utilities for list buttons
+function moveUp(id){
+  const idx = points.findIndex(p=>p.id===id);
+  if(idx>0){ points.splice(idx-1,0, points.splice(idx,1)[0]); renderMap(); }
+}
+function moveDown(id){
+  const idx = points.findIndex(p=>p.id===id);
+  if(idx>=0 && idx<points.length-1){ points.splice(idx+1,0, points.splice(idx,1)[0]); renderMap(); }
+}
+function removePoint(id){
+  if(!confirm('Vai tiešām vēlies dzēst šo punktu?')) return;
+  points = points.filter(p=>p.id!==id);
+  renderMap();
+}
+
+// zoom and use as start
+function zoomToPoint(id){ const p = points.find(x=>x.id===id); if(p) map.setView([p.lat,p.lon],12); }
+function useAsStart(id){
+  const idx = points.findIndex(p=>p.id===id);
+  if(idx> -1){ const newOrder = points.slice(idx).concat(points.slice(0,idx)); points = newOrder; renderMap(); }
+}
+
+// apply start from dropdown
+document.getElementById('applyStart').addEventListener('click', ()=>{
+  const sel = document.getElementById('startSelect').value;
+  if(!sel) return alert('Izvēlies starta punktu.');
+  useAsStart(sel);
+});
+
+// reverse order
+document.getElementById('reverseBtn').addEventListener('click', ()=>{
+  points.reverse(); renderMap();
+});
+
+// add new point via form
+let addMode = false;
+document.getElementById('enableAdd').addEventListener('click', (e)=>{
+  addMode = !addMode;
+  e.target.textContent = addMode? '🖱 Kartē pievienošana: IESLĒGTA' : '🖱 Kartē pievienošana: IZSLĒGTA';
+  e.target.classList.toggle('secondary', !addMode);
+});
+
+document.getElementById('addBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('newName').value.trim() || prompt('Ievadi nosaukumu punktam:');
+  if(!name) return alert('Nav nosaukuma.');
+  const icon = document.getElementById('newIcon').value.trim() || '📍';
+  // default center of map as location
+  const center = map.getCenter();
+  points.push({name, lat:center.lat, lon:center.lng, icon, id:cryptoRandomId()});
+  document.getElementById('newName').value=''; document.getElementById('newIcon').value='';
+  renderMap();
+});
+
+// add point by map click (when addMode)
+map.on('click', function(e){
+  if(!addMode) return;
+  const name = prompt('Ievadi nosaukumu jaunajam punktam (atcel, ja negribi):');
+  if(!name) return;
+  const icon = prompt('Ievadi ikonu (piem., 🏖️) — atstāj tukšu, lai izmantotu noklusēto.') || '📍';
+  points.push({name, lat:e.latlng.lat, lon:e.latlng.lng, icon, id:cryptoRandomId()});
+  renderMap();
+});
+
+// --- animation logic ---
+function startAnimation(){
+  if(animState.running) return;
+  const latlngs = points.map(p=>[p.lat,p.lon]);
+  if(latlngs.length<2) return alert('Punktu nepieciešams vismaz 2, lai animētu.');
+  // remove existing animated marker if any
+  if(animatedMarker) map.removeLayer(animatedMarker);
+  animState.running = true;
+  animState.idx = 0;
+  animState.t = 0;
+  animState.steps = 180;
+  animatedMarker = L.marker(latlngs[0], {icon: L.divIcon({html:'✈️', className:'animated-icon', iconSize:[28,28], iconAnchor:[14,14]})}).addTo(map);
+
+  function step(){
+    if(!animState.running) return;
+    const i = animState.idx;
+    if(i >= latlngs.length-1){ // finished
+      animState.running = false;
+      return;
+    }
+    const s = L.latLng(latlngs[i]);
+    const e = L.latLng(latlngs[i+1]);
+    const t = animState.t / animState.steps;
+    const lat = s.lat + (e.lat - s.lat) * t;
+    const lng = s.lng + (e.lng - s.lng) * t;
+    animatedMarker.setLatLng([lat,lng]);
+    // pan map a bit to keep animated marker visible
+    map.panTo([lat,lng], {animate:false});
+    animState.t++;
+    if(animState.t > animState.steps){
+      animState.idx++;
+      animState.t = 0;
+    }
+    // schedule next frame
+    animInterval = requestAnimationFrame(step);
+  }
+  animInterval = requestAnimationFrame(step);
+}
+
+function stopAnimation(){
+  animState.running = false;
+  if(animInterval) cancelAnimationFrame(animInterval);
+  if(animatedMarker){ map.removeLayer(animatedMarker); animatedMarker = null; }
+}
+
+// controls for animation buttons
+document.getElementById('animateBtn').addEventListener('click', ()=>{
+  startAnimation();
+});
+document.getElementById('stopAnim').addEventListener('click', ()=>{
+  stopAnimation();
+});
+
+// dark mode toggle
+document.getElementById('darkToggle').addEventListener('click', ()=>{
+  document.body.classList.toggle('dark');
+  // simple visual flip for tiles: invert map container for a dark look
+  document.getElementById('map').classList.toggle('dark');
+});
+
+// allow useAsStart from popup buttons (global scope)
+window.useAsStart = useAsStart;
+window.zoomToPoint = zoomToPoint;
+window.moveUp = moveUp;
+window.moveDown = moveDown;
+window.removePoint = removePoint;
+
+// initial render
+renderMap();
+
+// compute basic distances (great-circle) and append to panel
+function haversine(lat1,lon1,lat2,lon2){
+  const R = 6371;
+  const toRad = v=>v*Math.PI/180;
+  const dLat = toRad(lat2-lat1);
+  const dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)*Math.sin(dLon/2);
+  const c = 2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  return R*c;
+}
+function appendDistances(){
+  let total=0;
+  const segs=[];
+  for(let i=0;i<points.length-1;i++){
+    const d = haversine(points[i].lat, points[i].lon, points[i+1].lat, points[i+1].lon);
+    total+=d;
+    segs.push({from:points[i].name,to:points[i+1].name,dist:d});
+  }
+  const div = document.createElement('div');
+  div.style.marginTop='10px';
+  let inner = '<strong>Aptuvenie tiešie attālumi:</strong><ol>';
+  segs.forEach(s=> inner+=`<li>${s.from} → ${s.to}: ${s.dist.toFixed(1)} km</li>`);
+  inner += `</ol><b>Kopā:</b> ${total.toFixed(1)} km`;
+  div.innerHTML = inner;
+  document.getElementById('panel').appendChild(div);
+}
+// append once (user can re-open page to update distances after edits)
+appendDistances();
+
+</script>
+</body>
+</html>
